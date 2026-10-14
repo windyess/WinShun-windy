@@ -1,12 +1,95 @@
-name: Test Windows Runner
+name: Build WinShun for Windowsx64
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: winshun-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  test:
+  build:
+    name: Build Windows x64
     runs-on: windows-latest
+
     steps:
-      - name: Test
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Enable MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Qt 6.8
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.3"
+          arch: win64_msvc2022_64
+
+      - name: Set Qt environment
         shell: pwsh
-        run: Write-Host "Windows runner is working"
+        run: '"QT_DIR=$env:QT_ROOT_DIR" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append'
+
+      - name: Verify tools
+        shell: pwsh
+        run: |
+          where.exe cl.exe
+          where.exe cmake.exe
+          where.exe ninja.exe
+          cl.exe
+          cmake --version
+          ninja --version
+
+      - name: Clean build directory
+        shell: pwsh
+        run: Remove-Item -LiteralPath "build\release" -Recurse -Force -ErrorAction SilentlyContinue
+
+      - name: Configure Release build
+        shell: pwsh
+        run: cmake -S . -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl.exe -DCMAKE_CXX_COMPILER=cl.exe -DCMAKE_PREFIX_PATH="$env:QT_DIR"
+
+      - name: Build Release
+        shell: pwsh
+        run: cmake --build build/release --parallel
+
+      - name: Locate executable
+        id: app
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -LiteralPath "build\release" -Filter "WinShun.exe" -Recurse | Select-Object -First 1
+
+          if (-not $exe) {
+            throw "WinShun.exe was not produced."
+          }
+
+          "exe=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "app_dir=$($exe.Directory.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Deploy Qt runtime
+        shell: pwsh
+        run: |
+          & "$env:QT_ROOT_DIR\bin\windeployqt.exe" --release --qmldir "." "${{ steps.app.outputs.exe }}"
+
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Create portable ZIP
+        shell: pwsh
+        run: Compress-Archive -Path "${{ steps.app.outputs.app_dir }}\*" -DestinationPath "WinShun-windows-x64.zip" -Force
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: WinShun-windows-x64
+          path: WinShun-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14
