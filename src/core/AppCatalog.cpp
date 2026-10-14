@@ -267,7 +267,7 @@ QString AppInfo::launchPath() const
 
 QString appLaunchPath(const QString& id)
 {
-    return kLaunchPrefix + id;
+    return QString(kLaunchPrefix) + id;
 }
 
 bool isAppLaunchPath(QStringView path) noexcept
