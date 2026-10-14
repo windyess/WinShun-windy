@@ -28,10 +28,10 @@ jobs:
         with:
           arch: x64
 
-      - name: Install Qt 6.8
+      - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
-          version: "6.8.3"
+          version: "6.10.0"
           arch: win64_msvc2022_64
 
       - name: Set Qt environment
