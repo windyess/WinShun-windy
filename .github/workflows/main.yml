@@ -1,0 +1,12 @@
+name: Test Windows Runner
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - name: Test
+        shell: pwsh
+        run: Write-Host "Windows runner is working"
