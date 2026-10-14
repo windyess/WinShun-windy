@@ -1,0 +1,92 @@
+name: Build WinShun for Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Qt 6.8
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.3"
+          arch: win64_msvc2022_64
+
+      - name: Set Qt path for CMake preset
+        shell: pwsh
+        run: |
+          "QT_DIR=$env:QT_ROOT_DIR" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Show build environment
+        shell: pwsh
+        run: |
+          cmake --version
+          ninja --version
+          Write-Host "QT_ROOT_DIR=$env:QT_ROOT_DIR"
+          Write-Host "QT_DIR=$env:QT_DIR"
+
+      - name: Configure Release build
+        shell: pwsh
+        run: cmake --preset release
+
+      - name: Build Release
+        shell: pwsh
+        run: cmake --build --preset release --parallel
+
+      - name: Find executable
+        id: app
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "build/release" -Filter "WinShun.exe" -Recurse |
+            Select-Object -First 1
+
+          if (-not $exe) {
+            throw "WinShun.exe was not produced under build/release."
+          }
+
+          "exe=$($exe.FullName)" |
+            Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+          "app_dir=$($exe.Directory.FullName)" |
+            Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Deploy Qt runtime
+        shell: pwsh
+        run: |
+          & "$env:QT_ROOT_DIR\bin\windeployqt.exe" `
+            --release `
+            --qmldir . `
+            "${{ steps.app.outputs.exe }}"
+
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Create ZIP package
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path "${{ steps.app.outputs.app_dir }}\*" `
+            -DestinationPath "WinShun-windows-x64.zip" `
+            -Force
+
+      - name: Upload portable package
+        uses: actions/upload-artifact@v4
+        with:
+          name: WinShun-windows-x64
+          path: WinShun-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14
