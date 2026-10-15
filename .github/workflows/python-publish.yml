@@ -1,70 +1,140 @@
-# This workflow will upload a Python Package to PyPI when a release is created
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python#publishing-to-package-registries
-
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
-
-name: Upload Python Package
+name: Build WinShun Windows Packages
 
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
 
 permissions:
   contents: read
 
+concurrency:
+  group: winshun-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  release-build:
-    runs-on: ubuntu-latest
+  build:
+    name: Build Windows x64 packages
+    runs-on: windows-latest
+    timeout-minutes: 90
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout source
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Enable MSVC
+        uses: ilammy/msvc-dev-cmd@v1
         with:
-          python-version: "3.x"
+          arch: x64
 
-      - name: Build release distributions
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.10.0"
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: Install Inno Setup
+        shell: pwsh
         run: |
-          # NOTE: put your own distribution build steps here.
-          python -m pip install build
-          python -m build
+          choco install innosetup --yes --no-progress
 
-      - name: Upload distributions
+          $iscc = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          ) | Where-Object {
+            Test-Path -LiteralPath $_
+          } | Select-Object -First 1
+
+          if (-not $iscc) {
+            throw "Inno Setup compiler ISCC.exe was not found."
+          }
+
+          "ISCC=$iscc" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Verify environment
+        shell: pwsh
+        run: |
+          where.exe cl.exe
+          where.exe cmake.exe
+          where.exe ninja.exe
+
+          cl.exe
+          cmake --version
+          ninja --version
+
+          Write-Host "Qt: $env:QT_ROOT_DIR"
+          Write-Host "Inno Setup: $env:ISCC"
+
+          if (-not (Test-Path "$env:QT_ROOT_DIR\bin\qmake.exe")) {
+            throw "Qt installation is incomplete."
+          }
+
+          if (-not (Test-Path "$env:ISCC")) {
+            throw "ISCC.exe is unavailable."
+          }
+
+      - name: Build installer and portable package
+        shell: pwsh
+        run: |
+          ./scripts/release.ps1 `
+            -QtDir "$env:QT_ROOT_DIR" `
+            -Iscc "$env:ISCC"
+
+      - name: Verify packages
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem `
+            -LiteralPath "dist" `
+            -Filter "WinShun-*-x64-setup.exe" |
+            Select-Object -First 1
+
+          $portable = Get-ChildItem `
+            -LiteralPath "dist" `
+            -Filter "WinShun-*-x64-portable.zip" |
+            Select-Object -First 1
+
+          $sums = "dist\SHA256SUMS.txt"
+
+          if (-not $setup) {
+            throw "Installer was not produced."
+          }
+
+          if (-not $portable) {
+            throw "Portable package was not produced."
+          }
+
+          if (-not (Test-Path -LiteralPath $sums)) {
+            throw "SHA256SUMS.txt was not produced."
+          }
+
+          Write-Host "Installer: $($setup.Name)"
+          Write-Host "Portable: $($portable.Name)"
+          Get-Content -LiteralPath $sums
+
+      - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: release-dists
-          path: dist/
+          name: WinShun-Windows-x64-installer
+          path: dist/WinShun-*-x64-setup.exe
+          if-no-files-found: error
+          retention-days: 30
 
-  pypi-publish:
-    runs-on: ubuntu-latest
-    needs:
-      - release-build
-    permissions:
-      # IMPORTANT: this permission is mandatory for trusted publishing
-      id-token: write
-
-    # Dedicated environments with protections for publishing are strongly recommended.
-    # For more information, see: https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment#deployment-protection-rules
-    environment:
-      name: pypi
-      # OPTIONAL: uncomment and update to include your PyPI project URL in the deployment status:
-      # url: https://pypi.org/p/YOURPROJECT
-      #
-      # ALTERNATIVE: if your GitHub Release name is the PyPI project version string
-      # ALTERNATIVE: exactly, uncomment the following line instead:
-      # url: https://pypi.org/project/YOURPROJECT/${{ github.event.release.name }}
-
-    steps:
-      - name: Retrieve release distributions
-        uses: actions/download-artifact@v4
+      - name: Upload portable package
+        uses: actions/upload-artifact@v4
         with:
-          name: release-dists
-          path: dist/
+          name: WinShun-Windows-x64-portable
+          path: dist/WinShun-*-x64-portable.zip
+          if-no-files-found: error
+          retention-days: 30
 
-      - name: Publish release distributions to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
         with:
-          packages-dir: dist/
+          name: WinShun-SHA256SUMS
+          path: dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
